@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Ujikom BPKP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/charts/loader.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #cbd5e1; }
+        .view-content { display: none; }
+        .view-active { display: block; }
+        .menu-active { background-color: #1e293b; border-right: 4px solid #3b82f6; color: #60a5fa; }
+        .google-visualization-table-table { width: 100%; border-collapse: collapse; }
+        .google-visualization-table-td { padding: 12px !important; border: 1px solid #334155 !important; }
+        .google-visualization-table-th { background-color: #1e293b !important; color: white !important; padding: 12px !important; }
+        .status-msg { padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+        .status-error { background-color: #7f1d1d; color: #fecaca; }
+        .status-info { background-color: #1e3a5f; color: #93c5fd; }
+    </style>
+</head>
+<body class="flex h-screen bg-slate-900 font-sans">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-slate-950 border-r border-slate-800 flex flex-col">
+        <div class="p-6 font-bold text-white text-lg border-b border-slate-800">SIM Ujikom BPKP</div>
+        <nav class="flex-1 px-4 py-4 space-y-2">
+            <button onclick="show(1)" id="b1" class="menu-item menu-active w-full p-3 rounded-lg text-sm flex items-center">Dashboard</button>
+            <button onclick="show(2)" id="b2" class="menu-item w-full p-3 rounded-lg text-sm flex items-center">Tabel Data</button>
+            <button onclick="show(3)" id="b3" class="menu-item w-full p-3 rounded-lg text-sm flex items-center">Pengaturan Link</button>
+        </nav>
+    </aside>
+
+    <!-- Main -->
+    <main class="flex-1 p-8 overflow-y-auto">
+        <div id="v1" class="view-content view-active">
+            <h1 class="text-2xl font-bold text-white mb-6">Dashboard Monitoring</h1>
+            <div id="status_chart"></div>
+            <div id="chart_div" class="bg-slate-800 p-4 rounded-xl border border-slate-700">Memuat Grafik...</div>
+        </div>
+
+        <div id="v2" class="view-content">
+            <h1 class="text-2xl font-bold text-white mb-6">Tabel Data</h1>
+            <div id="status_table"></div>
+            <div id="table_div" class="bg-slate-800 p-4 rounded-xl border border-slate-700"></div>
+        </div>
+
+        <div id="v3" class="view-content bg-slate-800 p-8 rounded-xl border border-slate-700 max-w-lg">
+            <h2 class="text-xl font-bold text-white mb-4">Pengaturan</h2>
+            <p class="text-sm text-slate-400 mb-3">
+                Paste link Google Sheets biasa (link Share/Edit, BUKAN link "Publish to Web").
+                Contoh: <span class="text-slate-300">https://docs.google.com/spreadsheets/d/1AbCDeFgH.../edit#gid=0</span>
+            </p>
+            <p class="text-sm text-slate-400 mb-4">
+                Pastikan akses sheet di-set ke <b>"Anyone with the link" &rarr; Viewer</b> (Share &gt; General access).
+            </p>
+            <input type="text" id="urlInput" class="w-full p-3 bg-slate-900 border border-slate-600 rounded text-white mb-4" placeholder="https://docs.google.com/spreadsheets/d/....../edit#gid=0">
+            <button onclick="save()" class="bg-blue-600 text-white px-6 py-2 rounded">Simpan & Refresh</button>
+        </div>
+    </main>
+
+    <script>
+        google.charts.load('current', {'packages':['corechart', 'table']});
+
+        function show(n) {
+            document.querySelectorAll('.view-content').forEach(v => v.classList.remove('view-active'));
+            document.getElementById('v' + n).classList.add('view-active');
+        }
+
+        // Ekstrak spreadsheet ID dan gid dari berbagai bentuk link Google Sheets
+        function parseSheetUrl(raw) {
+            const idMatch = raw.match(/\/d\/([a-zA-Z0-9-_]+)/);
+            if (!idMatch) return null;
+            const id = idMatch[1];
+            let gid = '0';
+            const gidMatch = raw.match(/[?#&]gid=(\d+)/);
+            if (gidMatch) gid = gidMatch[1];
+            return { id, gid };
+        }
+
+        function save() {
+            const raw = document.getElementById('urlInput').value.trim();
+            const parsed = parseSheetUrl(raw);
+            if (!parsed) {
+                alert('Link tidak valid. Pastikan ini adalah link Google Sheets (mengandung "/d/SPREADSHEET_ID/").');
+                return;
+            }
+            localStorage.setItem('sheet_id', parsed.id);
+            localStorage.setItem('sheet_gid', parsed.gid);
+            localStorage.setItem('sheet_url_raw', raw);
+            location.reload();
+        }
+
+        function showStatus(elId, msg, type) {
+            const el = document.getElementById(elId);
+            el.innerHTML = `<div class="status-msg status-${type}">${msg}</div>`;
+        }
+
+        function clearStatus(elId) {
+            document.getElementById(elId).innerHTML = '';
+        }
+
+        // Parser CSV sederhana yang menangani koma di dalam tanda kutip
+        function parseCSV(text) {
+            const rows = [];
+            let row = [], field = '', inQuotes = false;
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i], next = text[i + 1];
+                if (inQuotes) {
+                    if (c === '"' && next === '"') { field += '"'; i++; }
+                    else if (c === '"') { inQuotes = false; }
+                    else { field += c; }
+                } else {
+                    if (c === '"') { inQuotes = true; }
+                    else if (c === ',') { row.push(field); field = ''; }
+                    else if (c === '\r') { /* skip */ }
+                    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+                    else { field += c; }
+                }
+            }
+            if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+            return rows.filter(r => r.length > 1 || (r.length === 1 && r[0] !== ''));
+        }
+
+        function buildDataTable(rows) {
+            const dt = new google.visualization.DataTable();
+            const headers = rows[0];
+            const dataRows = rows.slice(1);
+
+            // Deteksi tipe tiap kolom: number kalau semua baris di kolom itu numerik, selain itu string
+            const colIsNumeric = headers.map((_, colIdx) =>
+                dataRows.length > 0 && dataRows.every(r => {
+                    const v = (r[colIdx] || '').trim();
+                    return v === '' || !isNaN(v.replace(/\./g, '').replace(',', '.'));
+                })
+            );
+
+            headers.forEach((h, i) => dt.addColumn(colIsNumeric[i] ? 'number' : 'string', h));
+            dt.addRows(dataRows.map(r =>
+                headers.map((_, i) => {
+                    const v = (r[i] || '').trim();
+                    if (colIsNumeric[i]) return v === '' ? null : parseFloat(v.replace(',', '.'));
+                    return v;
+                })
+            ));
+            return dt;
+        }
+
+        async function draw() {
+            const id = localStorage.getItem('sheet_id');
+            const gid = localStorage.getItem('sheet_gid') || '0';
+            if (!id) return;
+
+            // Export CSV langsung -- lebih stabil daripada gviz/tq (tidak kena JSONP/ad-blocker)
+            const csvUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+
+            clearStatus('status_chart');
+            clearStatus('status_table');
+
+            try {
+                const resp = await fetch(csvUrl, { cache: 'no-store' });
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}. Sheet kemungkinan belum di-share publik.`);
+                }
+                const text = await resp.text();
+
+                // Kalau responsnya HTML (halaman login Google), berarti sheet tidak publik
+                if (text.trim().startsWith('<')) {
+                    throw new Error('Sheet belum bisa diakses publik (menerima halaman login, bukan CSV). Cek Share > General access > "Anyone with the link".');
+                }
+
+                const rows = parseCSV(text);
+                if (rows.length < 2) {
+                    throw new Error('Data kosong atau kurang dari 2 baris (butuh minimal 1 header + 1 baris data).');
+                }
+
+                const dt = buildDataTable(rows);
+                new google.visualization.Table(document.getElementById('table_div')).draw(dt, {showRowNumber: true});
+                try {
+                    new google.visualization.PieChart(document.getElementById('chart_div')).draw(dt, {title: 'Distribusi Data'});
+                } catch (e) {
+                    showStatus('status_chart', 'Data tidak cocok untuk PieChart (kolom pertama harus label/teks, kolom kedua harus angka).', 'info');
+                }
+            } catch (err) {
+                const errMsg = `Gagal memuat data: ${err.message}. ` +
+                    `Cek: (1) Sheet sudah di-share "Anyone with the link - Viewer", ` +
+                    `(2) gid pada link sesuai tab yang benar, ` +
+                    `(3) Spreadsheet ID benar.`;
+                showStatus('status_chart', errMsg, 'error');
+                showStatus('status_table', errMsg, 'error');
+                document.getElementById('table_div').innerHTML = '';
+                document.getElementById('chart_div').innerHTML = '';
+            }
+        }
+
+        window.onload = () => {
+            const id = localStorage.getItem('sheet_id');
+            const rawUrl = localStorage.getItem('sheet_url_raw');
+            if (rawUrl) document.getElementById('urlInput').value = rawUrl;
+            if (id) {
+                google.charts.setOnLoadCallback(() => { draw(); });
+            } else {
+                showStatus('status_chart', 'Belum ada link tersimpan. Buka menu "Pengaturan Link" untuk memasukkan link Google Sheets.', 'info');
+            }
+        };
+    </script>
+</body>
+</html>
